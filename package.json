@@ -1,0 +1,16 @@
+{
+  "name": "myfitnesspal-mcp-cloudflare",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.0.30"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260623.1",
+    "typescript": "5.9.3",
+    "wrangler": "^4.103.0"
+  }
+}
