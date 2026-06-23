@@ -6,28 +6,5 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true
-  },
-  "containers": [
-    {
-      "class_name": "MyFitnessPalContainer",
-      "image": "registry.cloudflare.com/cf7c28c664e3b83711275e5c9295934a/myfitnesspal-mcp-cloudflare:latest",
-      "max_instances": 1
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "class_name": "MyFitnessPalContainer",
-        "name": "MFP_CONTAINER"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "new_sqlite_classes": ["MyFitnessPalContainer"],
-      "tag": "v1"
-    }
-  ]
+  }
 }
-
-

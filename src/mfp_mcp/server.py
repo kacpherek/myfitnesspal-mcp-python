@@ -1642,12 +1642,7 @@ def refresh_browser_cookies(browser: str = "chrome") -> str:
 
 def main():
     """Run the MCP server."""
-    transport = os.environ.get("MFP_MCP_TRANSPORT", "stdio")
-    if transport != "stdio":
-        mcp.settings.host = "0.0.0.0"
-        mcp.settings.port = int(os.environ.get("PORT", "8080"))
-        mcp.settings.transport_security.enable_dns_rebinding_protection = False
-    mcp.run(transport=transport)
+    mcp.run()
 
 
 if __name__ == "__main__":
