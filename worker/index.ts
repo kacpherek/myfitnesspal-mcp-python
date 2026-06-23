@@ -5,6 +5,9 @@ interface Env {
   MFP_COOKIE?: string;
   MFP_USERNAME?: string;
   MFP_PASSWORD?: string;
+  MFP_ACCESS_TOKEN?: string;
+  MFP_REFRESH_TOKEN?: string;
+  MFP_USER_ID?: string;
 }
 
 type JsonRpcId = string | number | null;
@@ -24,6 +27,22 @@ type Auth = {
 
 const MFP = "https://www.myfitnesspal.com";
 const API = "https://api.myfitnesspal.com";
+const USER_FIELDS = [
+  "diary_preferences",
+  "goal_preferences",
+  "unit_preferences",
+  "paid_subscriptions",
+  "account",
+  "goal_displays",
+  "location_preferences",
+  "system_data",
+  "profiles",
+  "step_sources",
+  "privacy_preferences",
+  "social_preferences",
+  "app_preferences",
+  "partner_only_fields",
+];
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36";
 
@@ -173,8 +192,7 @@ async function callTool(name: string, args: Record<string, unknown>, env: Env) {
     case "mfp_get_exercises":
       return getExercises(auth, stringArg(args.date) ?? today());
     case "mfp_get_goals": {
-      const diary = await getDiary(auth, stringArg(args.date) ?? today());
-      return { date: diary.date, goals: diary.daily_goals };
+      return getGoals(auth, stringArg(args.date) ?? today());
     }
     case "mfp_set_goals":
       return setGoals(auth, args);
@@ -207,6 +225,22 @@ async function callTool(name: string, args: Record<string, unknown>, env: Env) {
 }
 
 async function authenticate(env: Env): Promise<Auth> {
+  if (env.MFP_ACCESS_TOKEN && env.MFP_USER_ID) {
+    const metadata = await apiRequest(
+      `/v2/users/${env.MFP_USER_ID}?${fieldsQuery(USER_FIELDS)}`,
+      "",
+      env.MFP_ACCESS_TOKEN,
+      env.MFP_USER_ID,
+    );
+    const metadataJson = await expectJson<{ item: { username: string } }>(metadata);
+    return {
+      cookie: env.MFP_COOKIE?.trim() ?? "",
+      accessToken: env.MFP_ACCESS_TOKEN,
+      userId: env.MFP_USER_ID,
+      username: metadataJson.item.username,
+    };
+  }
+
   let cookie = env.MFP_COOKIE?.trim();
   if (!cookie) {
     if (!env.MFP_USERNAME || !env.MFP_PASSWORD) {
@@ -225,7 +259,7 @@ async function authenticate(env: Env): Promise<Auth> {
   }>();
 
   const metadata = await apiRequest(
-    `/v2/users/${token.user_id}?fields[]=profiles&fields[]=diary_preferences`,
+    `/v2/users/${token.user_id}?${fieldsQuery(USER_FIELDS)}`,
     cookie,
     token.access_token,
     token.user_id,
@@ -271,6 +305,39 @@ async function login(username: string, password: string): Promise<string> {
 }
 
 async function getDiary(auth: Auth, date: string) {
+  if (!auth.cookie) {
+    const response = await apiRequest(
+      `/v2/diary?date=${date}&user_id=${auth.userId}`,
+      "",
+      auth.accessToken,
+      auth.userId,
+    );
+    const body = await expectJson<{ items?: Array<Record<string, any>> }>(response);
+    const meals: Record<string, { entries: unknown[]; totals: Record<string, number> }> = {};
+    for (const item of body.items ?? []) {
+      if (item.type !== "diary_meal") continue;
+      meals[item.diary_meal] = {
+        entries: item.entries ?? [],
+        totals: item.nutritional_contents ?? {},
+      };
+    }
+    const dailyTotals: Record<string, number> = {};
+    for (const meal of Object.values(meals)) {
+      for (const [key, value] of Object.entries(meal.totals)) {
+        dailyTotals[key] = (dailyTotals[key] ?? 0) + Number(value);
+      }
+    }
+    const [goals, water] = await Promise.all([getGoals(auth, date), getWater(auth, date)]);
+    return {
+      date,
+      meals,
+      daily_totals: dailyTotals,
+      daily_goals: goals.goals,
+      water,
+      notes: "",
+    };
+  }
+
   const html = await htmlRequest(
     `${MFP}/food/diary/${encodeURIComponent(auth.username)}?date=${date}`,
     auth.cookie,
@@ -466,6 +533,17 @@ async function getExercises(auth: Auth, date: string) {
   return { date, exercises };
 }
 
+async function getGoals(auth: Auth, date: string) {
+  const response = await apiRequest(
+    `/v2/nutrient-goals?date=${date}`,
+    auth.cookie,
+    auth.accessToken,
+    auth.userId,
+  );
+  const body = await expectJson<{ items?: Array<{ default_goal?: Record<string, unknown> }> }>(response);
+  return { date, goals: body.items?.[0]?.default_goal ?? {} };
+}
+
 async function setGoals(auth: Auth, args: Record<string, unknown>) {
   const date = today();
   const currentResponse = await apiRequest(
@@ -505,6 +583,20 @@ async function setGoals(auth: Auth, args: Record<string, unknown>) {
 }
 
 async function getWater(auth: Auth, date: string) {
+  if (!auth.cookie) {
+    const response = await apiRequest(
+      `/v2/diary?date=${date}&user_id=${auth.userId}`,
+      "",
+      auth.accessToken,
+      auth.userId,
+    );
+    const body = await expectJson<{
+      items?: Array<{ type: string; milliliters?: number; water?: { milliliters?: number } }>;
+    }>(response);
+    const water = body.items?.find((item) => item.type === "water");
+    const milliliters = Number(water?.milliliters ?? water?.water?.milliliters ?? 0);
+    return { date, milliliters, cups: milliliters / 236.588 };
+  }
   const response = await mfpRequest(`${MFP}/food/water?date=${date}`, auth.cookie);
   const body = await expectJson<{ item: { milliliters: number } }>(response);
   const milliliters = Number(body.item.milliliters ?? 0);
@@ -663,6 +755,10 @@ function numeric(value: string) {
 function normalizeNutrient(value: string) {
   const key = value.trim().toLowerCase();
   return key === "carbs" ? "carbohydrates" : key;
+}
+
+function fieldsQuery(fields: string[]) {
+  return fields.map((field) => `fields%5B%5D=${encodeURIComponent(field)}`).join("&");
 }
 
 function today() {
